@@ -13,6 +13,7 @@ const EOT: u8 = 0x04;
 const ACK: u8 = 0x06;
 const NAK: u8 = 0x15;
 const CAN: u8 = 0x18;
+const PACKET_SZ: usize = 128;
 
 /// Implementation of the XMODEM protocol.
 pub struct Xmodem<R> {
@@ -232,7 +233,62 @@ impl<T: io::Read + io::Write> Xmodem<T> {
     ///
     /// An error of kind `UnexpectedEof` is returned if `buf.len() < 128`.
     pub fn read_packet(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        unimplemented!()
+        let rec = self.read_byte(true)?;
+        if rec == SOH {
+            self.started = true;
+            (self.progress)(Progress::Started);
+
+            // Check packet number information.
+            let packet = self.packet;
+            self.expect_byte(packet, "expected current packet number")?;
+            self.expect_byte(
+                255 - packet, "expected complement of cur. packet"
+            )?;
+
+            // Read packet.
+            if buf.len() == PACKET_SZ {
+                self.inner.read_exact(buf)?;
+            } else { // buf is too small
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "buffer provided is not packet size"
+                ));
+            }
+
+            // Checksum handling
+            let mut checksum : u8 = 0;
+            for b in buf {
+                checksum += *b;
+            }
+            match self.expect_byte(checksum, "checksum") {
+                Err(ref e) if e.kind() == io::ErrorKind::InvalidData => {
+                    // Checksum failed.
+                    self.write_byte(NAK)?;
+                    Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "Packet checksum does not match"
+                    ))
+                },
+                Err(e) => return Err(e), // ConnectionAborted or other.
+                Ok(_) => { // Checksum passed.
+                    self.write_byte(ACK)?;
+                    (self.progress)(Progress::Packet(self.packet));
+                    self.packet += 1;
+                    Ok(PACKET_SZ)
+                }
+            }
+        } else if rec == EOT { // End Transmisision
+            self.write_byte(NAK)?;
+            self.expect_byte_or_cancel(EOT, "expected end of transmission")?;
+            self.write_byte(ACK)?;
+            self.started = false;
+
+            Ok(0)
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData, "expected SOH or EOT"
+            ));
+        }
     }
 
     /// Sends (uploads) a single packet to the inner stream using the XMODEM
