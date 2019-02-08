@@ -173,12 +173,15 @@ impl<T: io::Read + io::Write> Xmodem<T> {
     /// byte was not `byte`, if the read byte was `CAN` and `byte` is not `CAN`,
     /// or if writing the `CAN` byte failed on byte mismatch.
     fn expect_byte_or_cancel(&mut self, byte: u8, msg: &'static str) -> io::Result<u8> {
-        let abort_on_can = byte != CAN;
-        if self.read_byte(abort_on_can)? == byte {
+        let read = self.read_byte(false)?;
+        if read == byte {
             Ok(byte)
         } else { // Bytes differ.
             self.write_byte(CAN)?;
-            Err(io::Error::new(io::ErrorKind::InvalidData, msg))
+            match read {
+                CAN => Err(io::Error::new(io::ErrorKind::ConnectionAborted, "received CAN")),
+                _ => Err(io::Error::new(io::ErrorKind::InvalidData, msg))
+            }
         }
     }
 
@@ -193,12 +196,15 @@ impl<T: io::Read + io::Write> Xmodem<T> {
     /// byte was not `byte`. If the read byte differed and was `CAN`, an error
     /// of `ConnectionAborted` is returned. Otherwise, the error kind is
     /// `InvalidData`.
-    fn expect_byte(&mut self, byte: u8, expected: &'static str) -> io::Result<u8> {
-        let abort_on_can = byte != CAN;
-        if self.read_byte(abort_on_can)? == byte {
+    fn expect_byte(&mut self, byte: u8, msg: &'static str) -> io::Result<u8> {
+        let read = self.read_byte(false)?;
+        if read == byte {
             Ok(byte)
         } else { // Bytes differ.
-            Err(io::Error::new(io::ErrorKind::InvalidData, expected))
+            match read {
+                CAN => Err(io::Error::new(io::ErrorKind::ConnectionAborted, "received CAN")),
+                _ => Err(io::Error::new(io::ErrorKind::InvalidData, msg))
+            }
         }
     }
 
