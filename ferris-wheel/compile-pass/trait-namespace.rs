@@ -14,5 +14,6 @@ mod a {
 // Do not modify this function.
 fn main() {
     let x = a::MyType;
+    use a::MyTrait;
     x.foo();
 }

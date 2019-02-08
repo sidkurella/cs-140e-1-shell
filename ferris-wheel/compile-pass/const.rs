@@ -2,7 +2,9 @@
 
 const VAR: i32 = add(34, 10);
 
-fn add(a: i32, b: i32) -> i32 {
+// Function was originally not const.
+// const evaluated at compile-time.
+const fn add(a: i32, b: i32) -> i32 {
     a + b
 }
 
