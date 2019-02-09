@@ -233,9 +233,20 @@ impl<T: io::Read + io::Write> Xmodem<T> {
     ///
     /// An error of kind `UnexpectedEof` is returned if `buf.len() < 128`.
     pub fn read_packet(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let rec = self.read_byte(true)?;
-        if rec == SOH {
+        if buf.len() != PACKET_SZ { // Verify the buffer size.
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "buffer provided is not packet size"
+            ));
+        }
+
+        if self.started == false { // Begin the file transfer.
+            self.write_byte(NAK)?;
             self.started = true;
+        }
+
+        let rec = self.read_byte(true)?;
+        if rec == SOH { // Handle packet.
             (self.progress)(Progress::Started);
 
             // Check packet number information.
@@ -245,15 +256,8 @@ impl<T: io::Read + io::Write> Xmodem<T> {
                 255 - packet, "expected complement of cur. packet"
             )?;
 
-            // Read packet.
-            if buf.len() == PACKET_SZ {
-                self.inner.read_exact(buf)?;
-            } else { // buf is too small
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "buffer provided is not packet size"
-                ));
-            }
+            // Read packet data.
+            self.inner.read_exact(buf)?;
 
             // Checksum handling
             let mut checksum : u8 = 0;
@@ -282,6 +286,7 @@ impl<T: io::Read + io::Write> Xmodem<T> {
             self.expect_byte_or_cancel(EOT, "expected end of transmission")?;
             self.write_byte(ACK)?;
             self.started = false;
+            self.packet = 1;
 
             Ok(0)
         } else {
