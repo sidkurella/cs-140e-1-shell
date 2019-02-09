@@ -327,7 +327,20 @@ impl<T: io::Read + io::Write> Xmodem<T> {
     ///
     /// An error of kind `Interrupted` is returned if a packet checksum fails.
     pub fn write_packet(&mut self, buf: &[u8]) -> io::Result<usize> {
-        unimplemented!()
+        if buf.len() != PACKET_SZ && buf.len() != 0 { // Verify the buffer size.
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "buffer provided is not packet size"
+            ));
+        }
+
+        if self.started == false { // Begin the file transfer.
+            (self.progress)(Progress::Waiting);
+            self.expect_byte(NAK);
+            self.started = true;
+        }
+
+        unimplemented!();
     }
 
     /// Flush this output stream, ensuring that all intermediately buffered
