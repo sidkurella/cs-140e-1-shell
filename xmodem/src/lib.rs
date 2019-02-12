@@ -8,11 +8,14 @@ pub use progress::{Progress, ProgressFn};
 
 use read_ext::ReadExt;
 
+/// Constants used in XMODEM protocol.
 const SOH: u8 = 0x01;
 const EOT: u8 = 0x04;
 const ACK: u8 = 0x06;
 const NAK: u8 = 0x15;
 const CAN: u8 = 0x18;
+
+/// Packet size for this XMODEM implementation.
 const PACKET_SZ: usize = 128;
 
 /// Implementation of the XMODEM protocol.
@@ -251,8 +254,8 @@ impl<T: io::Read + io::Write> Xmodem<T> {
 
             // Check packet number information.
             let packet = self.packet;
-            self.expect_byte(packet, "expected current packet number")?;
-            self.expect_byte(
+            self.expect_byte_or_cancel(packet, "expected current packet number")?;
+            self.expect_byte_or_cancel(
                 255 - packet, "expected complement of cur. packet"
             )?;
 
@@ -262,7 +265,7 @@ impl<T: io::Read + io::Write> Xmodem<T> {
             // Checksum handling
             let mut checksum : u8 = 0;
             for b in buf {
-                checksum += *b;
+                checksum = checksum.wrapping_add(*b);
             }
             match self.expect_byte(checksum, "checksum") {
                 Err(ref e) if e.kind() == io::ErrorKind::InvalidData => {
@@ -277,16 +280,16 @@ impl<T: io::Read + io::Write> Xmodem<T> {
                 Ok(_) => { // Checksum passed.
                     self.write_byte(ACK)?;
                     (self.progress)(Progress::Packet(self.packet));
-                    self.packet += 1;
+                    self.packet = self.packet.wrapping_add(1);
                     Ok(PACKET_SZ)
                 }
             }
         } else if rec == EOT { // End Transmisision
             self.write_byte(NAK)?;
-            self.expect_byte_or_cancel(EOT, "expected end of transmission")?;
+            self.expect_byte(EOT, "expected end of transmission")?;
             self.write_byte(ACK)?;
             self.started = false;
-            self.packet = 1;
+            self.packet = self.packet.wrapping_add(1);
 
             Ok(0)
         } else {
@@ -336,11 +339,50 @@ impl<T: io::Read + io::Write> Xmodem<T> {
 
         if self.started == false { // Begin the file transfer.
             (self.progress)(Progress::Waiting);
-            self.expect_byte(NAK);
+            self.expect_byte(NAK, "starting NAK")?;
             self.started = true;
+            (self.progress)(Progress::Started);
         }
 
-        unimplemented!();
+        if buf.len() == 0 {
+            self.write_byte(EOT)?;
+            self.expect_byte(NAK, "first EOT")?;
+            self.write_byte(EOT)?;
+            self.expect_byte(ACK, "second EOT")?;
+            Ok(0)
+        } else {
+            // Compute checksum
+            let mut checksum : u8 = 0;
+            for b in buf {
+                checksum = checksum.wrapping_add(*b);
+            }
+
+            let packet = self.packet;
+            self.packet = self.packet.wrapping_add(1);
+
+            for _ in 0..10 {
+                self.write_byte(SOH)?;
+                self.write_byte(packet)?;
+                self.write_byte(255 - packet)?;
+                self.inner.write_all(buf)?;
+                self.write_byte(checksum)?;
+
+                match self.read_byte(true)? {
+                    ACK => {
+                        (self.progress)(Progress::Packet(packet));
+                        return Ok(PACKET_SZ)
+                    },
+                    NAK => continue,
+                    _   => return Err(io::Error::new(
+                            io::ErrorKind::InvalidData, "expected NAK or ACK"
+                        ))
+                };
+            };
+
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData, "failed resend 10 times"
+            ))
+        }
     }
 
     /// Flush this output stream, ensuring that all intermediately buffered
