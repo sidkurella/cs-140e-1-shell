@@ -7,8 +7,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use structopt::StructOpt;
-use serial::core::{CharSize, BaudRate, StopBits, FlowControl, SerialDevice, SerialPortSettings};
-use xmodem::{Xmodem, Progress};
+use serial::SerialPort;
+use serial::core::{CharSize, BaudRate, StopBits, FlowControl};
+use xmodem::Xmodem;
 
 mod parsers;
 
@@ -52,7 +53,34 @@ fn main() {
     use std::io::{self, BufReader, BufRead};
 
     let opt = Opt::from_args();
+    println!("{:?}", &opt.tty_path);
+
     let mut serial = serial::open(&opt.tty_path).expect("path points to invalid TTY");
 
-    // FIXME: Implement the `ttywrite` utility.
+    // Set serial port settings
+    serial.reconfigure(&|settings| {
+        try!(settings.set_baud_rate(opt.baud_rate));
+        settings.set_char_size(opt.char_width);
+        settings.set_flow_control(opt.flow_control);
+        settings.set_stop_bits(opt.stop_bits);
+        Ok(())
+    }).expect("serial conguration failed");
+
+    // Set serial port timeout
+    (&mut serial as &mut serial::SerialPort).set_timeout(
+        Duration::from_secs(opt.timeout)).expect("serial timeout failed");
+
+    // Open input source
+    let mut input: Box<BufRead> = match opt.input {
+        Some(path) => Box::new(BufReader::new(File::open(path).expect("could not open input file"))),
+        None       => Box::new(BufReader::new(io::stdin()))
+    };
+
+    if opt.raw {
+        std::io::copy(&mut input, &mut serial).expect("could not write");
+    } else {
+        Xmodem::transmit_with_progress(input, serial, |progress| {
+            println!("Progress: {:?}", progress);
+        }).expect("could not send using xmodem");
+    }
 }
